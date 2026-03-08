@@ -19,7 +19,8 @@ function results = LoudnessMatch_Staircase(targetFreqsHz, saveFile, varargin)
 %   - Step size is halved after the first reversal (per staircase), once.
 %
 % RESPONSE:
-%   Press '1' if interval 1 louder, '2' if interval 2 louder. ESC aborts.
+%   Press '1' if interval 1 louder, '2' if interval 2 louder.
+%   ESC aborts in Psychtoolbox mode; fallback prompt accepts q/esc.
 %
 % DEPENDENCY:
 %   taper.m
@@ -118,8 +119,8 @@ if opt.Verbose
     fprintf('Reference: %.1f Hz @ refAmp=%.6f (linear)\n', refFreq, refAmp);
     fprintf('Targets (%d): %s\n', nF, mat2str(targetFreqsHz));
     fprintf('Bounds: [%.6f, %.6f]\n', AMP_MIN, AMP_MAX);
-    fprintf('Stop per freq: %d reversals (est uses last 6), or global maxTrials=%d\n', ...
-        opt.MaxReversalsPerFreq, opt.MaxTrials);
+    fprintf('Stop per freq: %d reversals (est uses last %d), or global maxTrials=%d\n', ...
+        max(opt.MinReversalsToFinish, opt.MaxReversalsPerFreq), opt.MinReversalsToFinish, opt.MaxTrials);
     fprintf('Save file: %s\n', saveFile);
     fprintf('Keys: 1=interval1 louder, 2=interval2 louder, ESC=abort\n\n');
 end
@@ -213,21 +214,21 @@ while trial < opt.MaxTrials && ~all([S.finished])
     S(pick).targetAmp = min(max(S(pick).targetAmp, AMP_MIN), AMP_MAX);
     S(pick).lastDir = dir;
 
-    % Log per-frequency:
-    S(pick).hist.targetAmp(end+1,1)     = S(pick).targetAmp;
-    S(pick).hist.stepAmp(end+1,1)       = S(pick).stepAmp;
+    % Log per-frequency (PRESENTED amp for this trial):
+    S(pick).hist.targetAmp(end+1,1)     = targetAmp;
+    S(pick).hist.stepAmp(end+1,1)       = stepAmp;
     S(pick).hist.targetFirst(end+1,1)   = targetFirst;
     S(pick).hist.choice(end+1,1)        = choice;
     S(pick).hist.targetLouder(end+1,1)  = targetWasChosenLouder;
     S(pick).hist.dir(end+1,1)           = dir;
     S(pick).hist.reversal(end+1,1)      = isRev;
-    S(pick).hist.targetAmp_dBeq(end+1,1)= 20*log10(max(S(pick).targetAmp,1e-12)/refAmp);
+    S(pick).hist.targetAmp_dBeq(end+1,1)= 20*log10(max(targetAmp,1e-12)/refAmp);
 
     % Log global:
     G.freqIndex(end+1,1)    = pick; 
     G.freqHz(end+1,1)       = fTarget;
-    G.targetAmp(end+1,1)    = S(pick).targetAmp;
-    G.stepAmp(end+1,1)      = S(pick).stepAmp;
+    G.targetAmp(end+1,1)    = targetAmp;
+    G.stepAmp(end+1,1)      = stepAmp;
     G.targetFirst(end+1,1)  = targetFirst;
     G.choice(end+1,1)       = choice;
     G.targetLouder(end+1,1) = targetWasChosenLouder;
@@ -235,7 +236,7 @@ while trial < opt.MaxTrials && ~all([S.finished])
     G.reversal(end+1,1)     = isRev;
 
     % Check finish condition for this frequency:
-    if S(pick).nRev >= opt.MaxReversalsPerFreq
+    if S(pick).nRev >= max(opt.MinReversalsToFinish, opt.MaxReversalsPerFreq)
         S(pick).finished = true;
     end
 
@@ -245,7 +246,7 @@ while trial < opt.MaxTrials && ~all([S.finished])
     end
 
     % Build interim results and save after every trial:
-    results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX);
+    results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX, opt.MinReversalsToFinish);
 
     try
         save(saveFile, 'results', 'opt', 'S', 'G', 'trial');
@@ -259,7 +260,7 @@ while trial < opt.MaxTrials && ~all([S.finished])
 end
 
 %% ---------------- Final results ----------------
-results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX);
+results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX, opt.MinReversalsToFinish);
 
 if opt.Verbose
     fprintf('\n--- Estimates (linear amps) ---\n');
@@ -286,7 +287,7 @@ end % main function
 
 
 %% =====================================================================
-function results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX)
+function results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX, minReversalsForEstimate)
 
 nF = numel(S);
 
@@ -302,7 +303,7 @@ for i = 1:nF
     h = S(i).hist;
     revIdx = find(h.reversal);
 
-    nUse = min(6, numel(revIdx));
+    nUse = min(minReversalsForEstimate, numel(revIdx));
     if nUse >= 2
         useIdx = revIdx(end-nUse+1:end);
         estAmp = mean(h.targetAmp(useIdx));
@@ -326,7 +327,7 @@ function x = makeToneBlock(freqHz, amp, setup, blockLength_s, fs, taperFrac, bur
 seq = [];
 for s = 1:setup.n_bursts
     dur = setup.pulse_dur(burstseq(s));
-    t   = 0:1/fs:dur;
+    t   = 0:1/fs:max(0, dur - 1/fs);
 
     burst = sin(2*pi*freqHz*t) * amp;
     burst = taper(burst, taperFrac);
@@ -335,7 +336,7 @@ for s = 1:setup.n_bursts
     seq  = [seq, burst, zeros(1, offN)]; %#ok<AGROW>
 end
 
-maxLen = round(blockLength_s*fs) - 4000; % matches your tonotopy buffer convention
+maxLen = max(1, round(blockLength_s*fs) - 4000); % matches your tonotopy buffer convention
 x = padOrTrim(seq, maxLen);
 end
 
