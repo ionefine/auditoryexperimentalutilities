@@ -26,8 +26,8 @@ p.addRequired('targetFreqsHz', @(x)isnumeric(x)&&isvector(x)&&all(x>0));
 p.addParameter('RefFreq', 1000, @(x)isnumeric(x)&&isscalar(x)&&x>0);
 p.addParameter('Fs', 44100, @(x)isnumeric(x)&&isscalar(x)&&x>0);
 p.addParameter('BlockLength', 2.0, @(x)isnumeric(x)&&isscalar(x)&&x>0);
-p.addParameter('NBursts', 8, @(x)isnumeric(x)&&isscalar(x)&&x>=1);
-p.addParameter('PulseDur', [0.05 0.2], @(x)isnumeric(x)&&numel(x)==2);
+p.addParameter('NBursts', 8, @(x)isnumeric(x)&&isscalar(x)&&x>=2);
+p.addParameter('PulseDur', [0.05 0.2], @(x)isnumeric(x)&&numel(x)==2&&all(x>0));
 p.addParameter('OffDur', 0.05, @(x)isnumeric(x)&&isscalar(x)&&x>=0);
 p.addParameter('TaperFrac', 0.2, @(x)isnumeric(x)&&isscalar(x)&&x>=0&&x<=1);
 
@@ -66,6 +66,10 @@ nF = numel(targetFreqsHz);
 setup.n_bursts   = opt.NBursts;
 setup.pulse_dur  = opt.PulseDur;
 setup.off_dur    = opt.OffDur;
+
+if setup.n_bursts < 5
+    error('NBursts must be >= 5 so makeBurstSeq can realize at least 4 switches.');
+end
 
 fs = opt.Fs;
 PEAK_MAX = 0.95;
@@ -337,7 +341,7 @@ for s = 1:setup.n_bursts
     seq  = [seq, burst, zeros(1, offN)]; %#ok<AGROW>
 end
 
-maxLen = round(blockLength_s*fs) - 4000; % matches your tonotopy buffer convention
+maxLen = max(1, round(blockLength_s*fs) - 4000); % matches your tonotopy buffer convention
 x = padOrTrim(seq, maxLen);
 end
 
