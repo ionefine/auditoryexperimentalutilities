@@ -4,7 +4,7 @@ function results = LoudnessMatch_Staircase(targetFreqsHz, saveFile, varargin)
 % to a 1000 Hz reference tone.
 %
 % USAGE:
-%   results = LoudnessMatch_InterleavedStaircases(targetFreqsHz, saveFile, ...)
+%   results = LoudnessMatch_Staircase(targetFreqsHz, saveFile, ...)
 %
 % REQUIRED INPUTS:
 %   targetFreqsHz : vector of target frequencies
@@ -19,7 +19,8 @@ function results = LoudnessMatch_Staircase(targetFreqsHz, saveFile, varargin)
 %   - Step size is halved after the first reversal (per staircase), once.
 %
 % RESPONSE:
-%   Press '1' if interval 1 louder, '2' if interval 2 louder. ESC aborts.
+%   Press '1' if interval 1 louder, '2' if interval 2 louder.
+%   ESC aborts in Psychtoolbox mode; fallback prompt accepts q/esc.
 %
 % DEPENDENCY:
 %   taper.m
@@ -56,6 +57,7 @@ p.addParameter('PickPolicy', 'random_active', @(s)ischar(s)||isstring(s));
 % 'round_robin'   = cycle through active staircases
 
 p.addParameter('ISI', 0.25, @(x)isnumeric(x)&&isscalar(x)&&x>=0);
+p.addParameter('InterTrialPause', 0.2, @(x)isnumeric(x)&&isscalar(x)&&x>=0.2);
 p.addParameter('Verbose', true, @(x)islogical(x)&&isscalar(x));
 
 p.parse(targetFreqsHz, saveFile, varargin{:});
@@ -118,8 +120,8 @@ if opt.Verbose
     fprintf('Reference: %.1f Hz @ refAmp=%.6f (linear)\n', refFreq, refAmp);
     fprintf('Targets (%d): %s\n', nF, mat2str(targetFreqsHz));
     fprintf('Bounds: [%.6f, %.6f]\n', AMP_MIN, AMP_MAX);
-    fprintf('Stop per freq: %d reversals (est uses last 6), or global maxTrials=%d\n', ...
-        opt.MaxReversalsPerFreq, opt.MaxTrials);
+    fprintf('Stop per freq: %d reversals (est uses last %d), or global maxTrials=%d\n', ...
+        max(opt.MinReversalsToFinish, opt.MaxReversalsPerFreq), opt.MinReversalsToFinish, opt.MaxTrials);
     fprintf('Save file: %s\n', saveFile);
     fprintf('Keys: 1=interval1 louder, 2=interval2 louder, ESC=abort\n\n');
 end
@@ -174,9 +176,8 @@ while trial < opt.MaxTrials && ~all([S.finished])
     sound(A, fs);
     pause(opt.BlockLength + opt.ISI);
     sound(B, fs);
-    pause(opt.BlockLength + 0.05);
 
-    choice = getChoice12();
+    choice = getChoice12DuringPlayback(opt.BlockLength, 0.05);
     if choice == 0
         if opt.Verbose, disp('Aborted.'); end
         break;
@@ -214,21 +215,21 @@ while trial < opt.MaxTrials && ~all([S.finished])
     S(pick).targetAmp = min(max(S(pick).targetAmp, AMP_MIN), AMP_MAX);
     S(pick).lastDir = dir;
 
-    % Log per-frequency:
-    S(pick).hist.targetAmp(end+1,1)     = S(pick).targetAmp;
-    S(pick).hist.stepAmp(end+1,1)       = S(pick).stepAmp;
+    % Log per-frequency (PRESENTED amp for this trial):
+    S(pick).hist.targetAmp(end+1,1)     = targetAmp;
+    S(pick).hist.stepAmp(end+1,1)       = stepAmp;
     S(pick).hist.targetFirst(end+1,1)   = targetFirst;
     S(pick).hist.choice(end+1,1)        = choice;
     S(pick).hist.targetLouder(end+1,1)  = targetWasChosenLouder;
     S(pick).hist.dir(end+1,1)           = dir;
     S(pick).hist.reversal(end+1,1)      = isRev;
-    S(pick).hist.targetAmp_dBeq(end+1,1)= 20*log10(max(S(pick).targetAmp,1e-12)/refAmp);
+    S(pick).hist.targetAmp_dBeq(end+1,1)= 20*log10(max(targetAmp,1e-12)/refAmp);
 
     % Log global:
     G.freqIndex(end+1,1)    = pick; 
     G.freqHz(end+1,1)       = fTarget;
-    G.targetAmp(end+1,1)    = S(pick).targetAmp;
-    G.stepAmp(end+1,1)      = S(pick).stepAmp;
+    G.targetAmp(end+1,1)    = targetAmp;
+    G.stepAmp(end+1,1)      = stepAmp;
     G.targetFirst(end+1,1)  = targetFirst;
     G.choice(end+1,1)       = choice;
     G.targetLouder(end+1,1) = targetWasChosenLouder;
@@ -236,7 +237,7 @@ while trial < opt.MaxTrials && ~all([S.finished])
     G.reversal(end+1,1)     = isRev;
 
     % Check finish condition for this frequency:
-    if S(pick).nRev >= opt.MaxReversalsPerFreq
+    if S(pick).nRev >= max(opt.MinReversalsToFinish, opt.MaxReversalsPerFreq)
         S(pick).finished = true;
     end
 
@@ -246,7 +247,7 @@ while trial < opt.MaxTrials && ~all([S.finished])
     end
 
     % Build interim results and save after every trial:
-    results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX);
+    results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX, opt.MinReversalsToFinish);
 
     try
         save(saveFile, 'results', 'opt', 'S', 'G', 'trial');
@@ -257,10 +258,13 @@ while trial < opt.MaxTrials && ~all([S.finished])
         warning('Could not save data after trial %d.\nFile: %s\nError: %s', ...
             trial, saveFile, ME.message);
     end
+
+    % Enforce a minimum pause between trials.
+    pause(opt.InterTrialPause);
 end
 
 %% ---------------- Final results ----------------
-results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX);
+results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX, opt.MinReversalsToFinish);
 
 if opt.Verbose
     fprintf('\n--- Estimates (linear amps) ---\n');
@@ -287,7 +291,7 @@ end % main function
 
 
 %% =====================================================================
-function results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX)
+function results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX, minReversalsForEstimate)
 
 nF = numel(S);
 
@@ -303,7 +307,7 @@ for i = 1:nF
     h = S(i).hist;
     revIdx = find(h.reversal);
 
-    nUse = min(6, numel(revIdx));
+    nUse = min(minReversalsForEstimate, numel(revIdx));
     if nUse >= 2
         useIdx = revIdx(end-nUse+1:end);
         estAmp = mean(h.targetAmp(useIdx));
@@ -327,7 +331,7 @@ function x = makeToneBlock(freqHz, amp, setup, blockLength_s, fs, taperFrac, bur
 seq = [];
 for s = 1:setup.n_bursts
     dur = setup.pulse_dur(burstseq(s));
-    t   = 0:1/fs:dur;
+    t   = 0:1/fs:max(0, dur - 1/fs);
 
     burst = sin(2*pi*freqHz*t) * amp;
     burst = taper(burst, taperFrac);
@@ -336,7 +340,7 @@ for s = 1:setup.n_bursts
     seq  = [seq, burst, zeros(1, offN)]; %#ok<AGROW>
 end
 
-maxLen = round(blockLength_s*fs) - 4000; % matches your tonotopy buffer convention
+maxLen = max(1, round(blockLength_s*fs) - 4000); % matches your tonotopy buffer convention
 x = padOrTrim(seq, maxLen);
 end
 
@@ -369,33 +373,75 @@ end
 end
 
 
-function choice = getChoice12()
+function choice = getChoice12DuringPlayback(playDur_s, graceDur_s)
 % Returns 1 or 2. Returns 0 if ESC pressed.
-% Uses figure keypress capture; ensure the figure has focus.
+% Prioritizes Psychtoolbox keyboard polling so responses can be collected
+% while interval 2 is still playing. Falls back to command-line input.
 
 choice = NaN;
+usePTB = (exist('KbCheck','file') == 2 || exist('KbCheck','file') == 3) && ...
+         (exist('KbName','file') == 2 || exist('KbName','file') == 3);
 
-fig = findobj('Type','figure','Name','LoudnessMatch');
-if isempty(fig) || ~isvalid(fig)
-    fig = figure('Name','LoudnessMatch','NumberTitle','off');
-    axis off;
-    text(0.1,0.6,'Press 1 if interval 1 louder, 2 if interval 2 louder','FontSize',12);
-    text(0.1,0.4,'ESC to abort','FontSize',12);
-end
-figure(fig); drawnow;
+if usePTB
+    KbName('UnifyKeyNames');
 
-while isnan(choice)
-    w = waitforbuttonpress;
-    if w
-        ch = get(fig,'CurrentCharacter');
-        if double(ch) == 27
-            choice = 0; % ESC
-            return;
-        elseif ch == '1'
-            choice = 1;
-        elseif ch == '2'
-            choice = 2;
+    % Prevent carryover responses from prior trials.
+    flushStalePTBKeys(0.5);
+
+    tStart = tic;
+    while toc(tStart) <= (playDur_s + graceDur_s) && isnan(choice)
+        [isDown, ~, keyCode] = KbCheck;
+        if isDown
+            keyNames = KbName(keyCode);
+            if ischar(keyNames)
+                keyNames = {keyNames};
+            end
+
+            if any(strcmpi(keyNames, 'ESCAPE'))
+                choice = 0;
+                return;
+            elseif any(strcmp(keyNames, '1!')) || any(strcmp(keyNames, '1'))
+                choice = 1;
+                return;
+            elseif any(strcmp(keyNames, '2@')) || any(strcmp(keyNames, '2'))
+                choice = 2;
+                return;
+            end
+
+            while KbCheck
+                pause(0.005);
+            end
         end
+        pause(0.005);
     end
 end
+
+% Fallback and catch-all if no valid key was captured during playback.
+while isnan(choice)
+    resp = strtrim(input('Response (1=interval1 louder, 2=interval2 louder, q=abort): ', 's'));
+    if strcmp(resp, '1')
+        choice = 1;
+    elseif strcmp(resp, '2')
+        choice = 2;
+    elseif strcmpi(resp, 'q') || strcmpi(resp, 'esc')
+        choice = 0;
+    end
+end
+end
+
+
+function flushStalePTBKeys(maxWait_s)
+% Wait until all keys are released to avoid reusing previous-trial keypresses.
+
+tStart = tic;
+while toc(tStart) < maxWait_s
+    [isDown, ~, ~] = KbCheck;
+    if ~isDown
+        break;
+    end
+    pause(0.005);
+end
+
+% Short settle delay to avoid edge-trigger carryover across trials.
+pause(0.01);
 end
