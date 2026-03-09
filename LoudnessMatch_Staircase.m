@@ -258,10 +258,8 @@ while trial < opt.MaxTrials && ~all([S.finished])
         warning('Could not save data after trial %d.\nFile: %s\nError: %s', ...
             trial, saveFile, ME.message);
     end
-
-    % Enforce a minimum pause between trials.
     pause(opt.InterTrialPause);
-end
+
 
 %% ---------------- Final results ----------------
 results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX, opt.MinReversalsToFinish);
