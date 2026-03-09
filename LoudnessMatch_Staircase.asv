@@ -131,7 +131,6 @@ trial = 0;
 rr_ptr = 0;
 
 while trial < opt.MaxTrials && ~all([S.finished])
-    FlushEvents;
     trial = trial + 1;
 
     % Choose which staircase to run this trial:
@@ -179,7 +178,6 @@ while trial < opt.MaxTrials && ~all([S.finished])
     sound(B, fs);
 
     choice = getChoice12DuringPlayback(opt.BlockLength, 0.05);
-    FlushEvents;
     if choice == 0
         if opt.Verbose, disp('Aborted.'); end
         break;
@@ -381,32 +379,32 @@ function choice = getChoice12DuringPlayback(playDur_s, graceDur_s)
 
 choice = NaN;
 
-KbName('UnifyKeyNames');
-tStart = tic;
-while toc(tStart) <= (playDur_s + graceDur_s) && isnan(choice)
-    [isDown, ~, keyCode] = KbCheck;
-    if isDown
-        keyNames = KbName(keyCode);
-        if ischar(keyNames)
-            keyNames = {keyNames};
-        end
+    KbName('UnifyKeyNames');
+    tStart = tic;
+    while toc(tStart) <= (playDur_s + graceDur_s) && isnan(choice)
+        [isDown, ~, keyCode] = KbCheck;
+        if isDown
+            keyNames = KbName(keyCode);
+            if ischar(keyNames)
+                keyNames = {keyNames};
+            end
 
-        if any(strcmpi(keyNames, 'ESCAPE'))
-            choice = 0;
-         
-            return;
-        elseif any(strcmp(keyNames, '1!')) || any(strcmp(keyNames, '1'))
-            choice = 1;
-            return;
-        elseif any(strcmp(keyNames, '2@')) || any(strcmp(keyNames, '2'))
-            choice = 2;
-            return;
-        end
+            if any(strcmpi(keyNames, 'ESCAPE'))
+                choice = 0;
+                return;
+            elseif any(strcmp(keyNames, '1!')) || any(strcmp(keyNames, '1'))
+                choice = 1;
+                return;
+            elseif any(strcmp(keyNames, '2@')) || any(strcmp(keyNames, '2'))
+                choice = 2;
+                return;
+            end
 
-        while KbCheck
-            pause(0.005);
+            while KbCheck
+                pause(0.005);
+            end
         end
+        pause(0.005);
     end
-    pause(0.005);
-end
+
 end
