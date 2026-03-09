@@ -131,7 +131,6 @@ trial = 0;
 rr_ptr = 0;
 
 while trial < opt.MaxTrials && ~all([S.finished])
-    FlushEvents;
     trial = trial + 1;
 
     % Choose which staircase to run this trial:
@@ -179,7 +178,6 @@ while trial < opt.MaxTrials && ~all([S.finished])
     sound(B, fs);
 
     choice = getChoice12DuringPlayback(opt.BlockLength, 0.05);
-    FlushEvents;
     if choice == 0
         if opt.Verbose, disp('Aborted.'); end
         break;
@@ -228,7 +226,8 @@ while trial < opt.MaxTrials && ~all([S.finished])
     S(pick).hist.targetAmp_dBeq(end+1,1)= 20*log10(max(targetAmp,1e-12)/refAmp);
 
     % Log global:
-    G.freqIndex(end+1,1)    = pick;
+
+    G.freqIndex(end+1,1)    = pick; 
     G.freqHz(end+1,1)       = fTarget;
     G.targetAmp(end+1,1)    = targetAmp;
     G.stepAmp(end+1,1)      = stepAmp;
@@ -260,21 +259,23 @@ while trial < opt.MaxTrials && ~all([S.finished])
         warning('Could not save data after trial %d.\nFile: %s\nError: %s', ...
             trial, saveFile, ME.message);
     end
+
+    % Enforce a minimum pause between trials.
     pause(opt.InterTrialPause);
 
 
-    %% ---------------- Final results ----------------
-    results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX, opt.MinReversalsToFinish);
+%% ---------------- Final results ----------------
+results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX, opt.MinReversalsToFinish);
 
-    if opt.Verbose
-        fprintf('\n--- Estimates (linear amps) ---\n');
-        for i = 1:nF
-            fprintf('%.1f Hz: estAmp=%.6f (nRev=%d, nTrials=%d)\n', ...
-                results.perFreq(i).freqHz, results.perFreq(i).estTargetAmp, ...
-                results.perFreq(i).nReversals, results.perFreq(i).nTrials);
-        end
-        fprintf('\n');
+if opt.Verbose
+    fprintf('\n--- Estimates (linear amps) ---\n');
+    for i = 1:nF
+        fprintf('%.1f Hz: estAmp=%.6f (nRev=%d, nTrials=%d)\n', ...
+            results.perFreq(i).freqHz, results.perFreq(i).estTargetAmp, ...
+            results.perFreq(i).nReversals, results.perFreq(i).nTrials);
     end
+    fprintf('\n');
+
 end
 
 % Final save
@@ -381,32 +382,67 @@ function choice = getChoice12DuringPlayback(playDur_s, graceDur_s)
 
 choice = NaN;
 
-KbName('UnifyKeyNames');
+
+    KbName('UnifyKeyNames');
+
+    % Prevent carryover responses from prior trials.
+    flushStalePTBKeys(0.5);
+
+    tStart = tic;
+    while toc(tStart) <= (playDur_s + graceDur_s) && isnan(choice)
+        [isDown, ~, keyCode] = KbCheck;
+        if isDown
+            keyNames = KbName(keyCode);
+            if ischar(keyNames)
+                keyNames = {keyNames};
+            end
+
+            if any(strcmpi(keyNames, 'ESCAPE'))
+                choice = 0;
+                return;
+            elseif any(strcmp(keyNames, '1!')) || any(strcmp(keyNames, '1'))
+                choice = 1;
+                return;
+            elseif any(strcmp(keyNames, '2@')) || any(strcmp(keyNames, '2'))
+                choice = 2;
+                return;
+            end
+
+            while KbCheck
+                pause(0.005);
+            end
+        end
+        pause(0.005);
+    end
+
+
+% Fallback and catch-all if no valid key was captured during playback.
+while isnan(choice)
+    resp = strtrim(input('Response (1=interval1 louder, 2=interval2 louder, q=abort): ', 's'));
+    if strcmp(resp, '1')
+        choice = 1;
+    elseif strcmp(resp, '2')
+        choice = 2;
+    elseif strcmpi(resp, 'q') || strcmpi(resp, 'esc')
+        choice = 0;
+    end
+end
+end
+
+
+function flushStalePTBKeys(maxWait_s)
+% Wait until all keys are released to avoid reusing previous-trial keypresses.
+
 tStart = tic;
-while toc(tStart) <= (playDur_s + graceDur_s) && isnan(choice)
-    [isDown, ~, keyCode] = KbCheck;
-    if isDown
-        keyNames = KbName(keyCode);
-        if ischar(keyNames)
-            keyNames = {keyNames};
-        end
-
-        if any(strcmpi(keyNames, 'ESCAPE'))
-            choice = 0;
-         
-            return;
-        elseif any(strcmp(keyNames, '1!')) || any(strcmp(keyNames, '1'))
-            choice = 1;
-            return;
-        elseif any(strcmp(keyNames, '2@')) || any(strcmp(keyNames, '2'))
-            choice = 2;
-            return;
-        end
-
-        while KbCheck
-            pause(0.005);
-        end
+while toc(tStart) < maxWait_s
+    [isDown, ~, ~] = KbCheck;
+    if ~isDown
+        break;
     end
     pause(0.005);
 end
+
+% Short settle delay to avoid edge-trigger carryover across trials.
+pause(0.01);
+
 end
