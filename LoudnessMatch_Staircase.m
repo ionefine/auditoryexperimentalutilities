@@ -57,6 +57,7 @@ p.addParameter('PickPolicy', 'random_active', @(s)ischar(s)||isstring(s));
 % 'round_robin'   = cycle through active staircases
 
 p.addParameter('ISI', 0.25, @(x)isnumeric(x)&&isscalar(x)&&x>=0);
+p.addParameter('InterTrialPause', 0.2, @(x)isnumeric(x)&&isscalar(x)&&x>=0.2);
 p.addParameter('Verbose', true, @(x)islogical(x)&&isscalar(x));
 
 p.parse(targetFreqsHz, saveFile, varargin{:});
@@ -257,7 +258,8 @@ while trial < opt.MaxTrials && ~all([S.finished])
         warning('Could not save data after trial %d.\nFile: %s\nError: %s', ...
             trial, saveFile, ME.message);
     end
-end
+    pause(opt.InterTrialPause);
+
 
 %% ---------------- Final results ----------------
 results = buildResultsStruct(S, G, refFreq, refAmp, AMP_MIN, AMP_MAX, opt.MinReversalsToFinish);
