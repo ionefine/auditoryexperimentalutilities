@@ -130,7 +130,7 @@ classdef stimulus
         function stim = CircularPitch(stim)
             stim.type = 'CircularPitch';
             d = stimulus.defaults;
-            d.direction = 'ascending';
+            d.direction = 'ambiguous';
             d.F0 = 128;
             d.ISI = 0;
             d.dur = .3;
@@ -430,7 +430,6 @@ classdef stimulus
 
     end
 end
-
 
 
 

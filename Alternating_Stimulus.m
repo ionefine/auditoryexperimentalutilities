@@ -64,18 +64,21 @@ stim = stimulus.add_off_period(stim);
 if stim.makeSpectrogram
     stim = stimulus.spectrogram(stim);
 end
+soundsc(stim.y, stim.Fs)
 end
 
 function d = defaultConfig()
 d = stimulus.defaults;
 d.Fs_i = 100;
+d.Fs = 8192;
 d.baseFreq = 261.63;
-d.sequence = {'hC','lC','hC','lC','aC','hC','lC'};
+d.sequence = {'aC', 'aC'}; %'hhC','lhC', 'hhC','lhC', 'aC', 'lhC','hhC','lhC', 'hhC', 'aC', 'hhC'};
 d.dur = 0.30;
 d.ISI = 0.05;
 d.rampDur = 0.05;
 d.amp = 1;
-d.harmonicMultipliers = [1,2,4,8,16];
+d.ambiguousMultipliers = [1,2,4,8,16];
+d.harmonicMultipliers = [1:5];
 d.fsigma = 0.85;
 d.offPeriod = 0;
 d.makeSpectrogram = true;
@@ -85,6 +88,8 @@ end
 function toneMap = defaultToneMap(baseFreq)
 toneMap.lC = struct('kind', 'pure', 'freq', baseFreq);
 toneMap.hC = struct('kind', 'pure', 'freq', 2 * baseFreq);
+toneMap.lhC = struct('kind', 'harmonic', 'freq', baseFreq);
+toneMap.hhC = struct('kind', 'harmonic', 'freq', 2 * baseFreq);
 toneMap.aC = struct('kind', 'ambiguous', 'centerFreq', baseFreq);
 end
 
@@ -155,12 +160,18 @@ switch lower(toneDef.kind)
         end
         eventFreq = toneDef.freq;
         eventAmp = baseAmplitude;
+ case 'harmonic'
+        if ~isfield(toneDef, 'freq') || isempty(toneDef.freq)
+            error('stim.toneMap.%s must define ''freq'' for pure tones.', label);
+        end
+        eventFreq = toneDef.freq.* stim.harmonicMultipliers;
+        eventAmp = baseAmplitude*ones(size(stim.harmonicMultipliers));
 
     case 'ambiguous'
         if ~isfield(toneDef, 'centerFreq') || isempty(toneDef.centerFreq)
             error('stim.toneMap.%s must define ''centerFreq'' for ambiguous tones.', label);
         end
-        eventFreq = toneDef.centerFreq .* stim.harmonicMultipliers;
+        eventFreq = toneDef.centerFreq .* stim.ambiguousMultipliers;
         eventAmp = baseAmplitude .* circularPitchEnvelope(eventFreq, toneDef.centerFreq, stim.fsigma);
 
     otherwise
