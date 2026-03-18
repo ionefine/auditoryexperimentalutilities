@@ -6,27 +6,28 @@ function stim = Alternating_Stimulus(stim)
 %
 % The implementation expands the event-level description in stim.sequence
 % into the component-level fields expected by stimulus.make_tones. Pure-tone
-% events contribute one frequency, while ambiguous events contribute several
-% harmonics shaped by a circular-pitch spectral envelope.
+% events contribute one frequency, while ambiguous events contribute the
+% six-harmonic Aim 3 chord defined in stimulus.Aim3.
 %
 % Optional fields in stim:
-%   baseFreq             Base pitch in Hz for the low pure tone / ambiguous C
-%   sequence             Cell array describing the order of events
-%   toneMap              Struct mapping sequence labels to tone definitions
-%   dur                  Scalar or per-event durations in seconds
-%   ISI                  Scalar or per-gap silent intervals in seconds
-%   t0                   Explicit event onset times in seconds
-%   rampDur              Scalar or per-event ramp durations in seconds
-%   amp                  Scalar or per-event amplitudes
-%   harmonicMultipliers  Harmonics used for ambiguous circular-pitch tone
-%   fsigma               Width of the spectral envelope for ambiguous tone
-%   offPeriod            Silence appended after the sequence
-%   makeSpectrogram      Logical flag for computing stim.fft
+%   baseFreq                      Base pitch in Hz for the low pure tone / ambiguous C
+%   sequence                      Cell array describing the order of events
+%   toneMap                       Struct mapping sequence labels to tone definitions
+%   dur                           Scalar or per-event durations in seconds
+%   ISI                           Scalar or per-gap silent intervals in seconds
+%   t0                            Explicit event onset times in seconds
+%   rampDur                       Scalar or per-event ramp durations in seconds
+%   amp                           Scalar or per-event amplitudes
+%   harmonicMultipliers           Harmonics used for harmonic-tone events
+%   ambiguousHarmonicMultipliers  Harmonics used for the Aim 3 ambiguous tone
+%   scFac                         Odd-harmonic scale factor for the Aim 3 ambiguous tone
+%   offPeriod                     Silence appended after the sequence
+%   makeSpectrogram               Logical flag for computing stim.fft
 %
 % Default toneMap entries:
 %   lC  - pure tone at middle C
 %   hC  - pure tone one octave above middle C
-%   aC  - ambiguous circular-pitch C
+%   aC  - Aim 3 ambiguous C with attenuated odd harmonics
 
 if nargin < 1 || isempty(stim)
     stim = struct();
@@ -77,9 +78,9 @@ d.dur = 0.30;
 d.ISI = 0.05;
 d.rampDur = 0.05;
 d.amp = 1;
-d.ambiguousMultipliers = [1,2,4,8,16];
-d.harmonicMultipliers = [1:5];
-d.fsigma = 0.85;
+d.ambiguousHarmonicMultipliers = 1:6;
+d.harmonicMultipliers = 1:5;
+d.scFac = 0;
 d.offPeriod = 0;
 d.makeSpectrogram = true;
 d.toneMap = defaultToneMap(d.baseFreq);
@@ -160,20 +161,20 @@ switch lower(toneDef.kind)
         end
         eventFreq = toneDef.freq;
         eventAmp = baseAmplitude;
- case 'harmonic'
+    case 'harmonic'
         if ~isfield(toneDef, 'freq') || isempty(toneDef.freq)
-            error('stim.toneMap.%s must define ''freq'' for pure tones.', label);
+            error('stim.toneMap.%s must define ''freq'' for harmonic tones.', label);
         end
-        eventFreq = toneDef.freq.* stim.harmonicMultipliers;
-        eventAmp = baseAmplitude*ones(size(stim.harmonicMultipliers));
-
+        eventFreq = toneDef.freq .* stim.harmonicMultipliers;
+        eventAmp = baseAmplitude * ones(size(stim.harmonicMultipliers));
     case 'ambiguous'
         if ~isfield(toneDef, 'centerFreq') || isempty(toneDef.centerFreq)
             error('stim.toneMap.%s must define ''centerFreq'' for ambiguous tones.', label);
         end
-        eventFreq = toneDef.centerFreq .* stim.ambiguousMultipliers;
-        eventAmp = baseAmplitude .* circularPitchEnvelope(eventFreq, toneDef.centerFreq, stim.fsigma);
-
+        eventFreq = toneDef.centerFreq .* stim.ambiguousHarmonicMultipliers;
+        eventAmp = baseAmplitude * ones(size(stim.ambiguousHarmonicMultipliers));
+        oddHarmonics = mod(stim.ambiguousHarmonicMultipliers, 2) == 1;
+        eventAmp(oddHarmonics) = baseAmplitude * stim.scFac;
     otherwise
         error('Unknown tone kind ''%s'' for sequence label ''%s''.', toneDef.kind, label);
 end
@@ -215,10 +216,4 @@ elseif numel(stim.ISI) == nEvents - 1
 else
     error('stim.ISI must be scalar, length nEvents-1, or length nEvents.');
 end
-end
-
-function amp = circularPitchEnvelope(freq, centerFreq, fsigma)
-% Match the circular-pitch weighting used in stimulus.CircularPitch.
-centerOfEnvelope = exp(mean(log(centerFreq .* [4, 8])));
-amp = 2 * exp(-0.5 * ((log(freq) - log(centerOfEnvelope)) ./ fsigma).^2);
 end
