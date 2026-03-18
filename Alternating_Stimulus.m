@@ -1,39 +1,72 @@
 function stim = Alternating_Stimulus(stim)
 % Alternating_Stimulus Generate a configurable alternating C-tone sequence.
 %
-%   stim = Alternating_Stimulus() returns a default stimulus sequence:
-%       hC lC hC lC aC hC lC
+% Default event sequence:
+%   hC lC hC lC aC hC lC
 %
-%   The stimulus combines pure tones and an ambiguous circular-pitch chord
-%   modeled after stimulus.CircularPitch. Every component tone is passed
-%   through stimulus.raisedCosineWindow via stimulus.make_tones.
+% The implementation expands the event-level description in stim.sequence
+% into the component-level fields expected by stimulus.make_tones. Pure-tone
+% events contribute one frequency, while ambiguous events contribute several
+% harmonics shaped by a circular-pitch spectral envelope.
 %
-%   Adjustable parameters (all optional fields in stim):
-%       baseFreq        Base pitch in Hz for the low pure tone / ambiguous C
-%       sequence        Cell array describing the order of events
-%       toneMap         Struct mapping sequence labels to tone types/freqs
-%       dur             Scalar or per-event durations in seconds
-%       ISI             Scalar or per-gap silent intervals in seconds
-%       t0              Explicit event onset times in seconds
-%       rampDur         Scalar or per-event ramp durations in seconds
-%       amp             Scalar or per-event amplitudes
-%       harmonicMultipliers  Harmonics used for ambiguous circular-pitch tone
-%       fsigma          Width of the spectral envelope for ambiguous tone
-%       offPeriod       Silence appended after the sequence
-%       makeSpectrogram Logical flag for computing stim.fft
+% Optional fields in stim:
+%   baseFreq             Base pitch in Hz for the low pure tone / ambiguous C
+%   sequence             Cell array describing the order of events
+%   toneMap              Struct mapping sequence labels to tone definitions
+%   dur                  Scalar or per-event durations in seconds
+%   ISI                  Scalar or per-gap silent intervals in seconds
+%   t0                   Explicit event onset times in seconds
+%   rampDur              Scalar or per-event ramp durations in seconds
+%   amp                  Scalar or per-event amplitudes
+%   harmonicMultipliers  Harmonics used for ambiguous circular-pitch tone
+%   fsigma               Width of the spectral envelope for ambiguous tone
+%   offPeriod            Silence appended after the sequence
+%   makeSpectrogram      Logical flag for computing stim.fft
 %
-%   Sequence labels can be freely changed. The default toneMap contains:
-%       lC  - pure tone at middle C
-%       hC  - pure tone one octave above middle C
-%       aC  - ambiguous circular-pitch C
+% Default toneMap entries:
+%   lC  - pure tone at middle C
+%   hC  - pure tone one octave above middle C
+%   aC  - ambiguous circular-pitch C
 
 if nargin < 1 || isempty(stim)
     stim = struct();
 end
 
-hasCustomToneMap = isfield(stim,'toneMap') && ~isempty(stim.toneMap);
-
+hasCustomToneMap = isfield(stim, 'toneMap') && ~isempty(stim.toneMap);
 stim.type = 'alternating_stimulus';
+stim = stimulus.addFields(stim, defaultConfig());
+
+if ~hasCustomToneMap
+    stim.toneMap = defaultToneMap(stim.baseFreq);
+end
+
+nEvents = numel(stim.sequence);
+eventDurations = expandToLength(stim.dur, nEvents, 'dur');
+eventRampDurations = expandToLength(stim.rampDur, nEvents, 'rampDur');
+eventAmplitudes = expandToLength(stim.amp, nEvents, 'amp');
+eventOnsets = resolveEventOnsets(stim, nEvents, eventDurations);
+
+[eventFreq, componentAmp, componentDur, componentRampDur, componentOnsets, componentLabels] = ...
+    buildSequenceComponents(stim, eventDurations, eventRampDurations, eventAmplitudes, eventOnsets);
+
+stim.freq = eventFreq;
+stim.amp = componentAmp;
+stim.dur = componentDur;
+stim.rampDur = componentRampDur;
+stim.t0 = componentOnsets;
+stim.componentLabels = componentLabels;
+stim.eventOnsets = eventOnsets;
+stim.eventSequence = stim.sequence;
+
+stim.y = stimulus.make_tones(stim);
+stim = stimulus.add_off_period(stim);
+
+if stim.makeSpectrogram
+    stim = stimulus.spectrogram(stim);
+end
+end
+
+function d = defaultConfig()
 d = stimulus.defaults;
 d.Fs_i = 100;
 d.baseFreq = 261.63;
@@ -47,84 +80,106 @@ d.fsigma = 0.85;
 d.offPeriod = 0;
 d.makeSpectrogram = true;
 d.toneMap = defaultToneMap(d.baseFreq);
-stim = stimulus.addFields(stim,d);
-
-if ~hasCustomToneMap
-    stim.toneMap = defaultToneMap(stim.baseFreq);
-end
-
-nEvents = numel(stim.sequence);
-stim.dur = expandToLength(stim.dur, nEvents, 'dur');
-stim.rampDur = expandToLength(stim.rampDur, nEvents, 'rampDur');
-stim.amp = expandToLength(stim.amp, nEvents, 'amp');
-
-if isfield(stim,'t0') && ~isempty(stim.t0)
-    stim.t0 = expandToLength(stim.t0, nEvents, 't0');
-else
-    ISI = expandISI(stim, nEvents);
-    stim.t0 = zeros(1,nEvents);
-    for iEvent = 2:nEvents
-        stim.t0(iEvent) = stim.t0(iEvent-1) + stim.dur(iEvent-1) + ISI(iEvent-1);
-    end
-end
-
-eventOnsets = stim.t0;
-
-freq = [];
-amp = [];
-dur = [];
-rampDur = [];
-t0 = [];
-componentLabels = {};
-
-for iEvent = 1:nEvents
-    label = stim.sequence{iEvent};
-    if ~isfield(stim.toneMap, label)
-        error('Sequence label ''%s'' is not defined in stim.toneMap.', label);
-    end
-
-    toneDef = stim.toneMap.(label);
-    switch lower(toneDef.kind)
-        case 'pure'
-            eventFreq = toneDef.freq;
-            eventAmp = stim.amp(iEvent);
-        case 'ambiguous'
-            eventFreq = toneDef.centerFreq .* stim.harmonicMultipliers;
-            eventAmp = stim.amp(iEvent) .* circularPitchEnvelope(eventFreq, toneDef.centerFreq, stim.fsigma);
-        otherwise
-            error('Unknown tone kind ''%s'' for sequence label ''%s''.', toneDef.kind, label);
-    end
-
-    nComponents = numel(eventFreq);
-    freq = [freq, eventFreq]; %#ok<AGROW>
-    amp = [amp, eventAmp]; %#ok<AGROW>
-    dur = [dur, repmat(stim.dur(iEvent), 1, nComponents)]; %#ok<AGROW>
-    rampDur = [rampDur, repmat(stim.rampDur(iEvent), 1, nComponents)]; %#ok<AGROW>
-    t0 = [t0, repmat(stim.t0(iEvent), 1, nComponents)]; %#ok<AGROW>
-    componentLabels = [componentLabels, repmat({label}, 1, nComponents)]; %#ok<AGROW>
-end
-
-stim.freq = freq;
-stim.amp = amp;
-stim.dur = dur;
-stim.rampDur = rampDur;
-stim.t0 = t0;
-stim.componentLabels = componentLabels;
-stim.eventOnsets = eventOnsets;
-stim.eventSequence = stim.sequence;
-
-stim.y = stimulus.make_tones(stim);
-stim = stimulus.add_off_period(stim);
-
-if stim.makeSpectrogram
-    stim = stimulus.spectrogram(stim);
-end
 end
 
 function toneMap = defaultToneMap(baseFreq)
-toneMap.lC = struct('kind','pure','freq',baseFreq);
-toneMap.hC = struct('kind','pure','freq',2*baseFreq);
-toneMap.aC = struct('kind','ambiguous','centerFreq',baseFreq);
+toneMap.lC = struct('kind', 'pure', 'freq', baseFreq);
+toneMap.hC = struct('kind', 'pure', 'freq', 2 * baseFreq);
+toneMap.aC = struct('kind', 'ambiguous', 'centerFreq', baseFreq);
+end
+
+function eventOnsets = resolveEventOnsets(stim, nEvents, eventDurations)
+if isfield(stim, 't0') && ~isempty(stim.t0)
+    eventOnsets = expandToLength(stim.t0, nEvents, 't0');
+    return
+end
+
+interStimulusIntervals = expandISI(stim, nEvents);
+eventOnsets = zeros(1, nEvents);
+
+for iEvent = 2:nEvents
+    previousOffset = eventOnsets(iEvent - 1) + eventDurations(iEvent - 1);
+    eventOnsets(iEvent) = previousOffset + interStimulusIntervals(iEvent - 1);
+end
+end
+
+function [freq, amp, dur, rampDur, t0, componentLabels] = buildSequenceComponents(stim, eventDurations, eventRampDurations, eventAmplitudes, eventOnsets)
+nEvents = numel(stim.sequence);
+componentCountPerEvent = zeros(1, nEvents);
+eventFrequencies = cell(1, nEvents);
+eventComponentAmplitudes = cell(1, nEvents);
+
+for iEvent = 1:nEvents
+    [eventFrequencies{iEvent}, eventComponentAmplitudes{iEvent}] = ...
+        describeEventComponents(stim, stim.sequence{iEvent}, eventAmplitudes(iEvent));
+    componentCountPerEvent(iEvent) = numel(eventFrequencies{iEvent});
+end
+
+nComponents = sum(componentCountPerEvent);
+freq = zeros(1, nComponents);
+amp = zeros(1, nComponents);
+dur = zeros(1, nComponents);
+rampDur = zeros(1, nComponents);
+t0 = zeros(1, nComponents);
+componentLabels = cell(1, nComponents);
+
+nextComponent = 1;
+for iEvent = 1:nEvents
+    componentIndices = nextComponent:(nextComponent + componentCountPerEvent(iEvent) - 1);
+
+    freq(componentIndices) = eventFrequencies{iEvent};
+    amp(componentIndices) = eventComponentAmplitudes{iEvent};
+    dur(componentIndices) = eventDurations(iEvent);
+    rampDur(componentIndices) = eventRampDurations(iEvent);
+    t0(componentIndices) = eventOnsets(iEvent);
+    componentLabels(componentIndices) = repmat(stim.sequence(iEvent), 1, componentCountPerEvent(iEvent));
+
+    nextComponent = componentIndices(end) + 1;
+end
+end
+
+function [eventFreq, eventAmp] = describeEventComponents(stim, label, baseAmplitude)
+if ~isfield(stim.toneMap, label)
+    error('Sequence label ''%s'' is not defined in stim.toneMap.', label);
+end
+
+toneDef = stim.toneMap.(label);
+if ~isfield(toneDef, 'kind') || isempty(toneDef.kind)
+    error('stim.toneMap.%s must define a non-empty ''kind'' field.', label);
+end
+
+switch lower(toneDef.kind)
+    case 'pure'
+        if ~isfield(toneDef, 'freq') || isempty(toneDef.freq)
+            error('stim.toneMap.%s must define ''freq'' for pure tones.', label);
+        end
+        eventFreq = toneDef.freq;
+        eventAmp = baseAmplitude;
+
+    case 'ambiguous'
+        if ~isfield(toneDef, 'centerFreq') || isempty(toneDef.centerFreq)
+            error('stim.toneMap.%s must define ''centerFreq'' for ambiguous tones.', label);
+        end
+        eventFreq = toneDef.centerFreq .* stim.harmonicMultipliers;
+        eventAmp = baseAmplitude .* circularPitchEnvelope(eventFreq, toneDef.centerFreq, stim.fsigma);
+
+    otherwise
+        error('Unknown tone kind ''%s'' for sequence label ''%s''.', toneDef.kind, label);
+end
+
+% Ensure row vectors so downstream concatenation is predictable.
+eventFreq = reshape(eventFreq, 1, []);
+eventAmp = expandAmplitudeToMatch(eventAmp, numel(eventFreq), label);
+end
+
+function eventAmp = expandAmplitudeToMatch(eventAmp, nComponents, label)
+if isscalar(eventAmp)
+    eventAmp = repmat(eventAmp, 1, nComponents);
+elseif numel(eventAmp) ~= nComponents
+    error('Amplitude definition for sequence label ''%s'' must be scalar or match its component count.', label);
+else
+    eventAmp = reshape(eventAmp, 1, []);
+end
 end
 
 function vals = expandToLength(vals, n, fieldName)
@@ -138,13 +193,13 @@ end
 end
 
 function ISI = expandISI(stim, nEvents)
-if ~isfield(stim,'ISI') || isempty(stim.ISI)
-    ISI = zeros(1, max(nEvents-1, 1));
+if ~isfield(stim, 'ISI') || isempty(stim.ISI)
+    ISI = zeros(1, max(nEvents - 1, 1));
 elseif isscalar(stim.ISI)
-    ISI = repmat(stim.ISI, 1, max(nEvents-1, 1));
+    ISI = repmat(stim.ISI, 1, max(nEvents - 1, 1));
 elseif numel(stim.ISI) == nEvents
     ISI = reshape(stim.ISI(1:end-1), 1, []);
-elseif numel(stim.ISI) == nEvents-1
+elseif numel(stim.ISI) == nEvents - 1
     ISI = reshape(stim.ISI, 1, []);
 else
     error('stim.ISI must be scalar, length nEvents-1, or length nEvents.');
@@ -152,6 +207,7 @@ end
 end
 
 function amp = circularPitchEnvelope(freq, centerFreq, fsigma)
-fc = exp(mean(log(centerFreq .* [4,8])));
-amp = 2 * exp(-0.5 * ((log(freq) - log(fc)) ./ fsigma).^2);
+% Match the circular-pitch weighting used in stimulus.CircularPitch.
+centerOfEnvelope = exp(mean(log(centerFreq .* [4, 8])));
+amp = 2 * exp(-0.5 * ((log(freq) - log(centerOfEnvelope)) ./ fsigma).^2);
 end
